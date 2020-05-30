@@ -1,2 +1,5 @@
 /venv
 /.vscode
+/avatars
+__pycache__
+dev.env

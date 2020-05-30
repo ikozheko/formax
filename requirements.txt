@@ -1,3 +1,6 @@
 beautifulsoup==4.9.1
 requests==2.23.0
 console-progressbar==1.1.2
+django==3.0.6
+django-environ==0.4.5
+mysqlclient==1.4.6
