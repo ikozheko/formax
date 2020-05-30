@@ -4,3 +4,5 @@ console-progressbar==1.1.2
 django==3.0.6
 django-environ==0.4.5
 mysqlclient==1.4.6
+lxml==4.5.1
+tqdm==4.46.0

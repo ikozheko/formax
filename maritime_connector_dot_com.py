@@ -3,26 +3,46 @@ from bs4.element import Tag
 import requests
 import json
 from console_progressbar import ProgressBar
+import sys
+import time
 import shutil
 import os
 from urllib.parse import urlparse
 
 site = 'http://maritime-connector.com'
 
+def get_total_count():
+    try:
+        url = f'{site}/seafarers/?page=1'
+        response = requests.get(url)
+        response.raise_for_status()
+        page = response.content.decode('utf-8')
+        page = BeautifulSoup(page, 'lxml')
+        total_count = int(page.find('p', {'class': 'result-count'}).string.lower().split(' of ')[1])
+    except:
+        total_count = None
+
+    return total_count
+
+
 def get_page(page_number):
     users = []
     url = f'{site}/seafarers/?page={page_number}'
     
     response = requests.get(url)
-    assert response.status_code == requests.codes.ok
+    response.raise_for_status()
 
     page = response.content.decode('utf-8')
-    page = BeautifulSoup(page, 'html.parser')
+    page = BeautifulSoup(page, 'lxml')
 
     container = page.find('ul', {'id': 'results-list'})
     pagination = page.find('p', {'class': 'pagination'})
-    next_page = pagination.find('a', {'class': 'next'}).attrs['href'] if pagination else None
-    print(f'next page = {next_page}')
+
+    try:
+        total_count = int(page.find('p', {'class': 'result-count'}).string.lower().split(' of ')[1])
+    except:
+        total_count = None
+    
     items = container.select('li')
     
     for item in items:
@@ -32,12 +52,19 @@ def get_page(page_number):
                 continue
             if cell.name == 'a':
                 href = cell.attrs['href']
-                break
-        response = requests.get(href)
-        assert response.status_code == requests.codes.ok
+                break        
+        try:
+            response = requests.get(href)
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            users.append({
+                'href': href,
+                'error': f'{e.response.status_code} {e.response.reason}'
+            })
+            continue        
 
         page = response.content.decode('utf-8')
-        page = BeautifulSoup(page, 'html.parser')
+        page = BeautifulSoup(page, 'lxml')
         description = page.find('div', {'class': 'description'})
         avatar = description.find('a', {'rel': 'prettyPhoto[profile]'})
         avatar_image = requests.get(avatar.attrs['href'], stream=True)
@@ -101,8 +128,9 @@ def get_page(page_number):
                     
                     if cells[3].string:
                         service_record['vessel_name'] = cells[3].string.strip()
-                    else:
-                        service_record['vessel_name'] = str(type(cells[3]))
+                    elif isinstance(cells[3], Tag):
+                        service_record['vessel_name'] = cells[3].find('a').attrs['href']
+
                     service_record['company'] = cells[4].string.strip() if cells[4].string else ''
                     service_record['from'] = cells[5].string.strip() if cells[5].string else ''
                     service_record['to'] = cells[6].string.strip() if cells[6].string else ''
@@ -113,8 +141,10 @@ def get_page(page_number):
         
         users.append({
             'href': href,
-            'avatar_href': avatar.attrs['href'],
-            'avatar_filename': filename,
+            'avatar': {
+                'href': avatar.attrs['href'],
+                'filename': filename,
+            },
             'title': description.find('h2').string.strip(),
             'department': department,
             'rank': rank,
@@ -122,13 +152,41 @@ def get_page(page_number):
             'service_records': service_records,
         })
     
-    return users
+    return users, total_count
+
 
 def main():
-    users = get_page(1)
-    
-    with open('seafarers.json', 'w') as file:
-        json.dump(users, file, indent=4)
+    all_users = []    
 
-if __name__ == "__main__":
+    completed_count = 0
+    page = 1
+    try:
+        with open('seafarers.json', 'r') as file:
+            data = json.load(file)
+            page = int(data['completed_page']) + 1
+            total_count = int(data['total_count'])
+            all_users = data['data']
+    except FileNotFoundError:
+        total_count = get_total_count()
+    
+    pb = ProgressBar(total=total_count,prefix='Here', suffix='Now', decimals=3, length=50, fill='\u25A0', zfill='-')
+    pb.print_progress_bar(len(all_users))
+    
+    while len(all_users) < total_count:
+        users, total_count = get_page(page)
+        all_users.extend(users)
+    
+        with open('seafarers.json', 'w') as file:
+            json.dump({
+                'completed_count': len(all_users),
+                'completed_page': page,
+                'total_count': total_count if total_count else page,
+                'data': all_users,
+            }, file, indent=4)
+
+        pb.print_progress_bar(len(all_users))        
+        page += 1
+    
+
+if __name__ == '__main__':
     main()
