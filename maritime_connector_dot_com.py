@@ -66,19 +66,23 @@ def get_page(page_number):
         page = response.content.decode('utf-8')
         page = BeautifulSoup(page, 'lxml')
         description = page.find('div', {'class': 'description'})
+        if not description:
+            description = page.find('p', {'class': 'description'})
+        
         avatar = description.find('a', {'rel': 'prettyPhoto[profile]'})
-        avatar_image = requests.get(avatar.attrs['href'], stream=True)
+        if avatar:
+            avatar_image = requests.get(avatar.attrs['href'], stream=True)
 
-        filename = os.path.basename(urlparse(avatar.attrs['href']).path)
-        with open(f'avatars/{filename}', 'wb') as file:
-            avatar_image.raw.decode_content = True
-            shutil.copyfileobj(avatar_image.raw, file)
+            filename = os.path.basename(urlparse(avatar.attrs['href']).path)
+            with open(f'avatars/{filename}', 'wb') as file:
+                avatar_image.raw.decode_content = True
+                shutil.copyfileobj(avatar_image.raw, file)
 
         parts = page.select('h3')        
         department = ''
         rank = ''
         nationality = ''
-        service_records = []
+        records = []
         
         for part in parts:
             if not isinstance(part, Tag):
@@ -120,36 +124,39 @@ def get_page(page_number):
                         row_index += 1
                         continue
 
-                    service_record = {}                    
+                    record = {}                    
                     cells = row.find_all('td')
-                    service_record['department'] = cells[0].string.strip() if cells[0].string else ''
-                    service_record['rank'] = cells[1].string.strip() if cells[1].string else ''
-                    service_record['ship_type'] = cells[2].string.strip() if cells[2].string else ''
-                    
-                    if cells[3].string:
-                        service_record['vessel_name'] = cells[3].string.strip()
-                    elif isinstance(cells[3], Tag):
-                        service_record['vessel_name'] = cells[3].find('a').attrs['href']
-
-                    service_record['company'] = cells[4].string.strip() if cells[4].string else ''
-                    service_record['from'] = cells[5].string.strip() if cells[5].string else ''
-                    service_record['to'] = cells[6].string.strip() if cells[6].string else ''
+                    if (len(cells) >= 7):
+                        record['department'] = cells[0].string.strip() if cells[0].string else ''
+                        record['rank'] = cells[1].string.strip() if cells[1].string else ''
+                        record['ship_type'] = cells[2].string.strip() if cells[2].string else ''
                         
-                    if row_index > 0:
-                        service_records.append(service_record)
+                        if cells[3].string:
+                            record['vessel_name'] = cells[3].string.strip()
+                        elif isinstance(cells[3], Tag):
+                            record['vessel_name'] = cells[3].find('a').attrs['href']
+
+                        record['company'] = cells[4].string.strip() if cells[4].string else ''
+                        record['from'] = cells[5].string.strip() if cells[5].string else ''
+                        record['to'] = cells[6].string.strip() if cells[6].string else ''
+                        
+                    if row_index > 0 and bool(record):
+                        records.append(record)
                     row_index += 1
-        
+        title = description.find('h2').string
+        title = title.strip() if title else ''
+
         users.append({
             'href': href,
             'avatar': {
                 'href': avatar.attrs['href'],
                 'filename': filename,
             },
-            'title': description.find('h2').string.strip(),
+            'title': title,
             'department': department,
             'rank': rank,
             'nationality': nationality,
-            'service_records': service_records,
+            'service_records': records,
         })
     
     return users, total_count
