@@ -135,6 +135,25 @@ def get_page(page_number):
                             record['vessel_name'] = cells[3].string.strip()
                         elif isinstance(cells[3], Tag):
                             record['vessel_name'] = cells[3].find('a').attrs['href']
+                            ship_page_response = requests.get(record['vessel_name'])
+                            ship_page_response.raise_for_status()
+
+                            ship_page = ship_page_response.content.decode('utf-8')
+                            ship_page = BeautifulSoup(ship_page, 'lxml')
+
+                            ship_table_rows = ship_page.find('table', {'class': 'ship-data-table'}).select('tr')
+                            for ship_table_row in ship_table_rows:
+                                if not isinstance(ship_table_row, Tag):
+                                    continue
+
+                                for cell in ship_table_row.children:
+                                    if not isinstance(cell, Tag):
+                                        continue
+                                    if not cell.string:
+                                        continue
+                                    cell_text = cell.string.strip()
+                                    if cell_text == 'IMO number':
+                                        record['imo_number'] = cell.parent.find_next('td').string.strip()
 
                         record['company'] = cells[4].string.strip() if cells[4].string else ''
                         record['from'] = cells[5].string.strip() if cells[5].string else ''
