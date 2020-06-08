@@ -6,3 +6,4 @@ django-environ==0.4.5
 mysqlclient==1.4.6
 lxml==4.5.1
 tqdm==4.46.0
+sentry-sdk==0.14.4
