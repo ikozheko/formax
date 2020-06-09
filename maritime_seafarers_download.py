@@ -1,4 +1,3 @@
-import requests
 import aiohttp
 from aiohttp.client_exceptions import ClientResponseError
 import asyncio
@@ -15,12 +14,12 @@ sentry_sdk.init(
 
 TOTAL_PAGE_COUNT = 163552
 LIMIT = 20
-MARITIME_URL = 'http://maritime-connector.com/seafarer/a/{0}'
+URL = 'http://maritime-connector.com/seafarer/a/{0}'
 
 semaphore = asyncio.Semaphore(LIMIT)
 
-async def fetch_maritime(page, session):
-    url = MARITIME_URL.format(page)
+async def fetch(page, session):
+    url = URL.format(page)
     filename = f'data/seafarers/{page}.html'
     
     if os.path.isfile(filename):
@@ -36,9 +35,9 @@ async def fetch_maritime(page, session):
             raise
 
 
-async def bound_fetch_maritime(semaphore, page, session):
+async def bound_fetch(semaphore, page, session):
     async with semaphore:
-        await fetch_maritime(page, session)
+        await fetch(page, session)
 
 
 async def download_maritimes(pages):
@@ -46,11 +45,10 @@ async def download_maritimes(pages):
 
     async with aiohttp.ClientSession() as session:
         for page in pages:
-            task = asyncio.ensure_future(bound_fetch_maritime(semaphore, page, session))
+            task = asyncio.ensure_future(bound_fetch(semaphore, page, session))
             tasks.append(task)
         
         progress_bar = tqdm(total=len(pages), desc='Download maritimes')
-        progress_bar.update()
 
         for coro in asyncio.as_completed(tasks):
             await coro
