@@ -3,6 +3,12 @@ from bs4.element import Tag
 import requests
 import json
 from console_progressbar import ProgressBar
+import sentry_sdk
+import os
+
+sentry_sdk.init(
+    os.environ.get('SENTRY_TOKEN'),
+)
 
 site = 'https://seafarersmatter.com/index.php/the-letter/?'
 
@@ -11,7 +17,7 @@ def get_page(page_number):
     url = f'{site}listpage={page_number}&instance=2'
     
     response = requests.get(url)
-    assert response.status_code == requests.codes.ok
+    response.raise_for_status()
 
     page = response.content.decode('utf-8')
     page = BeautifulSoup(page, 'html.parser')
