@@ -10,73 +10,61 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 import environ
 from playhouse.db_url import connect
-from playhouse.reflection import generate_models
-from playhouse.migrate import migrate, MySQLMigrator
-
 
 env = environ.Env()
 environ.Env.read_env(env_file='dev.env')
 db = connect(env('DATABASE_URL'))
-migrator = MySQLMigrator(db)
-
 
 sentry_sdk.init(
     os.environ.get('SENTRY_TOKEN'),
     integrations=[AioHttpIntegration()]
 )
 
-def db_setup():
-    class BaseModel(peewee.Model):
-        class Meta:
-            database = db
+class BaseModel(peewee.Model):
+    class Meta:
+        database = db
 
-    class Department(BaseModel):
-        name = peewee.CharField()
+class Department(BaseModel):
+    name = peewee.CharField()
 
-    class Rank(BaseModel):
-        name = peewee.CharField()
+class Rank(BaseModel):
+    name = peewee.CharField()
 
-    class Nationality(BaseModel):
-        name = peewee.CharField()
+class Nationality(BaseModel):
+    name = peewee.CharField()
 
-    class ShipType(BaseModel):
-        name = peewee.CharField()
+class ShipType(BaseModel):
+    name = peewee.CharField()
 
-    class Company(BaseModel):
-        name = peewee.CharField()
+class Company(BaseModel):
+    name = peewee.CharField()
 
-    class Vessel(BaseModel):
-        name = peewee.CharField(null = True)
-        href = peewee.CharField(null = True)
+class Vessel(BaseModel):
+    name = peewee.CharField(null = True)
+    href = peewee.CharField(null = True)
 
-    class ServiceRecord(BaseModel):
-        department = peewee.ForeignKeyField(Department)
-        rank = peewee.ForeignKeyField(Rank)
-        ship_type = peewee.ForeignKeyField(ShipType)
-        vessel = peewee.ForeignKeyField(Vessel)
-        company = peewee.ForeignKeyField(Company)
-        from_date = peewee.DateField()
-        to_date = peewee.DateField()
+class ServiceRecord(BaseModel):
+    department = peewee.ForeignKeyField(Department)
+    rank = peewee.ForeignKeyField(Rank)
+    ship_type = peewee.ForeignKeyField(ShipType)
+    vessel = peewee.ForeignKeyField(Vessel)
+    company = peewee.ForeignKeyField(Company)
+    from_date = peewee.DateField()
+    to_date = peewee.DateField()
 
-    class Seafarer(BaseModel):
-        id = peewee.IntegerField(unique=True)
-        name = peewee.CharField()
-        department = peewee.ForeignKeyField(Department)
-        rank = peewee.ForeignKeyField(Rank)
-        nationality = peewee.ForeignKeyField(Nationality)
+class Seafarer(BaseModel):
+    id = peewee.IntegerField(unique=True)
+    name = peewee.CharField()
+    department = peewee.ForeignKeyField(Department)
+    rank = peewee.ForeignKeyField(Rank)
+    nationality = peewee.ForeignKeyField(Nationality)
 
-    class ServiceRecords(BaseModel):
-        service_record = peewee.ForeignKeyField(ServiceRecord)
-        seafarer = peewee.ForeignKeyField(Seafarer)
+class ServiceRecords(BaseModel):
+    service_record = peewee.ForeignKeyField(ServiceRecord)
+    seafarer = peewee.ForeignKeyField(Seafarer)
 
-    db.create_tables((Department, Rank, Nationality, ShipType, Company, ServiceRecord, Seafarer, ServiceRecords, Vessel))
+db.create_tables((Department, Rank, Nationality, ShipType, Company, ServiceRecord, Seafarer, ServiceRecords, Vessel))
 
-models = generate_models(db)
-
-if not bool(models):
-    db_setup()
-    models = generate_models(db)
-globals().update(models)
 
 TOTAL_PAGE_COUNT = 163552
 LIMIT = 20
@@ -225,47 +213,33 @@ def read_seafarers():
 if __name__ == '__main__':
     
     for seafarer_item in read_seafarers():
-        # print(len(seafarer['service_records']))
-        # print(seafarer['service_records'][19]['vessel_href'])
-        # print(seafarer['service_records'][19].get('vessel_name', 'None'))
 
-        department, was_created = department.get_or_create(name = seafarer_item['department'])
-        rank, was_created = rank.get_or_create(name = seafarer_item['rank'])
-        nationality, was_created = nationality.get_or_create(name = seafarer_item['nationality'])
+        Seafarer.insert(
+            id = seafarer_item['pk'],
+            name = seafarer_item['title'],
+            department = Department.get_or_create(name = seafarer_item['department'])[0],
+            rank = Rank.get_or_create(name = seafarer_item['rank'])[0],
+            nationality = Nationality.get_or_create(name = seafarer_item['nationality'])[0],
+        ).on_conflict_replace().execute()
         
-        try:
-            seafarer_pk = seafarer.insert(
-                id = int(seafarer_item['pk']),
-                name = seafarer_item['title'],
-                department = department,
-                rank = rank,
-                nationality = nationality
-            ).execute()
-        except peewee.IntegrityError:
-            seafarer_pk = None
+        records = []
+        for record in seafarer_item['service_records']:
+            vessel_name = record.get('vessel_name', None)
+            if vessel_name:
+                vessel_item, was_created = Vessel.get_or_create(name = vessel_name)
+            else:
+                vessel_href = record.get('vessel_href', None)
+                if vessel_href:
+                    vessel_item, was_created = Vessel.get_or_create(href = vessel_href)
 
-        for service_record in seafarer_item['service_records']:
-            record = servicerecord()
-            record.department, was_created = department.get_or_create(name = service_record['department'])
-            record.rank, was_created = rank.get_or_create(name = service_record['rank'])
-            record.ship_type, was_created = shiptype.get_or_create(name = service_record['ship_type'])
-            
-            try:
-                vessel_pk = vessel.insert(
-                    name = service_record['vessel_name'] if 'vessel_name' in service_record else None,
-                    href = service_record['href'] if 'vessel_href' in service_record else None,
-                ).execute()
-            except peewee.IntegrityError:
-                vessel_pk = None
+            ServiceRecord.insert(
+                department = Department.get_or_create(name = record['department'])[0],
+                rank = Rank.get_or_create(name = record['rank'])[0],
+                ship_type = ShipType.get_or_create(name = record['ship_type'])[0],
+                vessel = vessel_item,
+                company = Company.get_or_create(name = record['company'])[0],
+                from_date = record['from'],
+                to_date = record['to'],
+            ).on_conflict_replace().execute()
+        break
 
-            record.vessel = vessel.get(id=vessel_pk)
-
-            record.company, was_created = company.get_or_create(name = service_record['company'])
-            record.from_date = service_record['from']
-            record.to_date = service_record['to']
-            try:
-                record_pk = record.save()
-                print(record_pk)
-                break
-            except peewee.IntegrityError:
-                record_pk = None
