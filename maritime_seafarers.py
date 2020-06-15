@@ -10,13 +10,14 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 import environ
 from playhouse.db_url import connect
+import timeit
 
 env = environ.Env()
 environ.Env.read_env(env_file='dev.env')
 db = connect(env('DATABASE_URL'))
 
 sentry_sdk.init(
-    os.environ.get('SENTRY_TOKEN'),
+    env('SENTRY_TOKEN'),
     integrations=[AioHttpIntegration()]
 )
 
@@ -43,27 +44,22 @@ class Vessel(BaseModel):
     name = peewee.CharField(null = True)
     href = peewee.CharField(null = True)
 
-class ServiceRecord(BaseModel):
-    department = peewee.ForeignKeyField(Department)
-    rank = peewee.ForeignKeyField(Rank)
-    ship_type = peewee.ForeignKeyField(ShipType)
-    vessel = peewee.ForeignKeyField(Vessel)
-    company = peewee.ForeignKeyField(Company)
-    from_date = peewee.DateField()
-    to_date = peewee.DateField()
-
 class Seafarer(BaseModel):
     id = peewee.IntegerField(unique=True)
     name = peewee.CharField()
-    department = peewee.ForeignKeyField(Department)
-    rank = peewee.ForeignKeyField(Rank)
-    nationality = peewee.ForeignKeyField(Nationality)
+    department = peewee.ForeignKeyField(Department, null=True)
+    rank = peewee.ForeignKeyField(Rank, null = True)
+    nationality = peewee.ForeignKeyField(Nationality, null=True)
 
-class ServiceRecords(BaseModel):
-    service_record = peewee.ForeignKeyField(ServiceRecord)
-    seafarer = peewee.ForeignKeyField(Seafarer)
-
-db.create_tables((Department, Rank, Nationality, ShipType, Company, ServiceRecord, Seafarer, ServiceRecords, Vessel))
+class ServiceRecord(BaseModel):
+    seafarer = peewee.ForeignKeyField(Seafarer, on_delete='CASCADE')
+    department = peewee.ForeignKeyField(Department, null=True)
+    rank = peewee.ForeignKeyField(Rank, null=True)
+    ship_type = peewee.ForeignKeyField(ShipType, null=True)
+    vessel = peewee.ForeignKeyField(Vessel, null=True)
+    company = peewee.ForeignKeyField(Company, null=True)
+    from_date = peewee.DateField()
+    to_date = peewee.DateField()
 
 
 TOTAL_PAGE_COUNT = 163552
@@ -123,123 +119,138 @@ async def download_by_ids(urlformat, fileformat, ids, pb_desc= 'Download'):
 #     except KeyboardInterrupt:
 #         pass
 
-def read_seafarers():
-    i = 1
-    files = os.listdir('data/seafarers/')
-    for filename in ['14452.html']:
-        pk = int(filename.split('.html')[0])
-        page = BeautifulSoup(open(f'data/seafarers/{filename}').read(), 'lxml')
+progress = tqdm(total=len(os.listdir('data/seafarers/')))
 
+def parse_html(filename):
+    pk = int(filename.split('.html')[0])
+    page = BeautifulSoup(open(f'data/seafarers/{filename}', encoding='utf-8').read(), 'lxml')
+
+    try:
         cv = page.find('div', {'id': 'personal-cv'})
         title = cv.find('div', {'class': 'description'}).find('h2')
         title = title.string.strip()
-        
-        parts = page.select('h3')        
-        department = ''
-        rank = ''
-        nationality = ''
-        records = []
-
-        for part in parts:
-            if not isinstance(part, Tag):
-                continue
-            if not part.text:
-                continue
-            text = part.text.strip()
-            rows = part.parent.find_next('table', {'class': 'cv-data-table'}).select('tr')
-
-            if text == 'Personal data':
-                for row in rows:
-                    for cell in row.children:
-                        if not isinstance(cell, Tag):
-                            continue
-                        if not cell.string:
-                            continue
-                        cell_text = cell.string.strip()
-                        if cell_text == 'Current department':
-                            department = cell.parent.find_next('td').string.strip()
-                        elif cell_text == 'Current rank':
-                            rank = cell.parent.find_next('td').string.strip()
-            elif text == 'Passport':                
-                for row in rows:
-                    offset = 0
-                    for cell in row.children:
-                        if not isinstance(cell, Tag):
-                            continue
-                        if not cell.string:
-                            continue
-                        cell_text = cell.string.strip()
-                        if cell_text == 'Nationality':
-                            data_cells = cell.parent.find_next('tr').select('td')
-                            nationality = data_cells[offset].string.strip()
-                        offset += 1
-            elif text == 'Service records':
-                    row_index = 0
-                    for row in rows:
-                        if row_index == 0:
-                            row_index += 1
-                            continue
-
-                        record = {}                    
-                        cells = row.find_all('td')
-                        if (len(cells) >= 7):
-                            record['department'] = cells[0].string.strip() if cells[0].string else ''
-                            record['rank'] = cells[1].string.strip() if cells[1].string else ''
-                            record['ship_type'] = cells[2].string.strip() if cells[2].string else ''
-                            
-                            if cells[3].string:
-                                record['vessel_name'] = cells[3].string.strip()
-                            elif isinstance(cells[3], Tag):
-                                record['vessel_href'] = cells[3].find('a').attrs['href']
-
-                            record['company'] = cells[4].string.strip() if cells[4].string else ''
-                            record['from'] = cells[5].string.strip() if cells[5].string else ''
-                            record['to'] = cells[6].string.strip() if cells[6].string else ''
-                            
-                        if row_index > 0 and bool(record):
-                            records.append(record)
-                        row_index += 1
-
-        yield {        
-            'pk': pk,
-            'title': title,
-            'department': department,
-            'rank': rank,
-            'nationality': nationality,
-            'service_records': records,
-        }
-
-
-if __name__ == '__main__':
+    except AttributeError:
+        progress.update()
+        return
     
-    for seafarer_item in read_seafarers():
+    parts = page.select('h3')        
+    department = ''
+    rank = ''
+    nationality = ''
+    records = []
 
-        Seafarer.insert(
-            id = seafarer_item['pk'],
-            name = seafarer_item['title'],
-            department = Department.get_or_create(name = seafarer_item['department'])[0],
-            rank = Rank.get_or_create(name = seafarer_item['rank'])[0],
-            nationality = Nationality.get_or_create(name = seafarer_item['nationality'])[0],
-        ).on_conflict_replace().execute()
-        
-        records = []
-        for record in seafarer_item['service_records']:
-            vessel_name = record.get('vessel_name', None)
-            if vessel_name:
-                vessel_item, was_created = Vessel.get_or_create(name = vessel_name)
-            else:
-                vessel_href = record.get('vessel_href', None)
-                if vessel_href:
-                    vessel_item, was_created = Vessel.get_or_create(href = vessel_href)
+    for part in parts:
+        if not isinstance(part, Tag):
+            continue
+        if not part.text:
+            continue
+        text = part.text.strip()
+        rows = part.parent.find_next('table', {'class': 'cv-data-table'}).select('tr')
 
-            ServiceRecord.insert(
-                department = Department.get_or_create(name = record['department'])[0],
-                rank = Rank.get_or_create(name = record['rank'])[0],
-                ship_type = ShipType.get_or_create(name = record['ship_type'])[0],
-                vessel = vessel_item,
-                company = Company.get_or_create(name = record['company'])[0],
-                from_date = record['from'],
-                to_date = record['to'],
-            ).on_conflict_replace().execute()
-        break
+        if text == 'Personal data':
+            for row in rows:
+                for cell in row.children:
+                    if not isinstance(cell, Tag):
+                        continue
+                    if not cell.string:
+                        continue
+                    cell_text = cell.string.strip()
+                    if cell_text == 'Current department':
+                        department = cell.parent.find_next('td').string.strip()
+                    elif cell_text == 'Current rank':
+                        rank = cell.parent.find_next('td').string.strip()
+        elif text == 'Passport':                
+            for row in rows:
+                offset = 0
+                for cell in row.children:
+                    if not isinstance(cell, Tag):
+                        continue
+                    if not cell.string:
+                        continue
+                    cell_text = cell.string.strip()
+                    if cell_text == 'Nationality':
+                        data_cells = cell.parent.find_next('tr').select('td')
+                        nationality = data_cells[offset].string.strip()
+                    offset += 1
+        elif text == 'Service records':
+                row_index = 0
+                for row in rows:
+                    if row_index == 0:
+                        row_index += 1
+                        continue
 
+                    record = {}                    
+                    cells = row.find_all('td')
+                    if (len(cells) >= 7):
+                        record['department'] = cells[0].string.strip() if cells[0].string else None
+                        record['rank'] = cells[1].string.strip() if cells[1].string else None
+                        record['ship_type'] = cells[2].string.strip() if cells[2].string else None
+                        
+                        if cells[3].string:
+                            record['vessel_name'] = cells[3].string.strip()
+                        elif isinstance(cells[3], Tag):
+                            record['vessel_href'] = cells[3].find('a').attrs['href']
+
+                        record['company'] = cells[4].string.strip() if cells[4].string else None
+                        record['from'] = cells[5].string.strip() if cells[5].string else None
+                        record['to'] = cells[6].string.strip() if cells[6].string else None
+                        
+                    if row_index > 0 and bool(record):
+                        records.append(record)
+                    row_index += 1
+
+    return {        
+        'pk': pk,
+        'title': title,
+        'department': department,
+        'rank': rank,
+        'nationality': nationality,
+        'service_records': records,
+    }
+
+def read_seafarers():
+
+    files = sorted(os.listdir('data/seafarers/'), key=lambda filename: int(filename.split('.html')[0]))
+
+    for filename in files:
+        obj = parse_html(filename)
+        if obj:
+            yield obj
+
+def get_or_create(model, **kwargs):
+    kwargs = {k: v for k, v in kwargs.items() if v}
+    if not kwargs: return None
+    return model.get_or_create(**kwargs)[0]
+
+# db.create_tables((Department, Rank, Nationality, ShipType, Company, ServiceRecord, Seafarer, Vessel))
+
+for seafarer in read_seafarers():
+
+    try:
+        obj = Seafarer.get_by_id(seafarer['pk'])
+        continue
+    except peewee.DoesNotExist:
+        pass
+
+    Seafarer.insert(
+        id = seafarer['pk'],
+        name = seafarer['title'],
+        department = get_or_create(Department, name=seafarer['department']),
+        rank = get_or_create(Rank, name=seafarer['rank']),
+        nationality = get_or_create(Nationality, name=seafarer['nationality'])
+    ).execute()
+    
+    records = []
+    for record in seafarer['service_records']:
+        records.append({
+            'seafarer_id': seafarer['pk'],
+            'department': get_or_create(Department, name=record['department']),
+            'rank': get_or_create(Rank, name=record['rank']),
+            'ship_type': get_or_create(ShipType, name=record['ship_type']),
+            'vessel': get_or_create(Vessel, name=record.get('vessel_name'), href=record.get('vessel_href')),
+            'company': get_or_create(Company, name=record['company']),
+            'from_date': record['from'],
+            'to_date': record['to'],
+        })
+    ServiceRecord.insert_many(rows=records).execute()
+    progress.update()
