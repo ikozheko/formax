@@ -12,12 +12,11 @@ import peewee
 from playhouse.db_url import connect
 from playhouse.shortcuts import model_to_dict
 from environs import Env
-import datetime
 
 env = Env()
 env.read_env('dev.env')
 db = connect(env('DATABASE_URL'))
-data_dir = env.path('DATA_DIR')
+data_dir = env.path('SEAFARER_DATA_DIR')
 
 sentry_sdk.init(
     env('SENTRY_TOKEN'),
