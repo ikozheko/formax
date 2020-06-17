@@ -1,9 +1,10 @@
 beautifulsoup==4.9.1
 requests==2.23.0
-console-progressbar==1.1.2
 django==3.0.6
 django-environ==0.4.5
 mysqlclient==1.4.6
 lxml==4.5.1
 tqdm==4.46.0
 sentry-sdk==0.14.4
+peewee==3.13.3
+python-telegram-bot==12.7
