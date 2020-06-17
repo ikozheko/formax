@@ -77,14 +77,20 @@ async def bound_fetch(semaphore, url, session, filename):
     async with semaphore:
         return await fetch(url, session, filename)
 
+def get_filename_by_url(url):
+    filehash = hashlib.md5(url.encode('utf-8')).hexdigest()                
+    filename = os.path.join(env.path('SHIP_DATA_DIR'), f'{filehash}.html')
+    return filename
+
 async def download_ships():
     semaphore = asyncio.Semaphore(20)
     async with aiohttp.ClientSession() as session:
         for page_id, urls in tqdm(iterable=read_ship_pages(), total=8082):
             tasks = []
             for url in urls:
-                filehash = hashlib.md5(url.encode('utf-8')).hexdigest()                
-                filename = os.path.join(env.path('SHIP_DATA_DIR'), f'{filehash}.html')
+                filename = get_filename_by_url(url)
+                if os.path.isfile(filename):
+                    continue
                 task = asyncio.ensure_future(bound_fetch(semaphore, url, session, filename))
                 tasks.append(task)
 
