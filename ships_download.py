@@ -1,10 +1,8 @@
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
 import asyncio
 import os
 import sys
 import sentry_sdk
-from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 from tqdm import tqdm
 from environs import Env
 from playhouse.db_url import connect
@@ -18,10 +16,10 @@ env.read_env('dev.env')
 
 sentry_sdk.init(
     os.environ.get('SENTRY_TOKEN'),
-    integrations=[AioHttpIntegration()]
+    integrations=[sentry_sdk.integrations.aiohttp.AioHttpIntegration()]
 )
 
-def iterate_pages():
+def url_generator():
     for entry in os.scandir(env.path('SHIP_PAGE_DATA_DIR')):
         if not entry.name.endswith('.html'): continue
         html = open(entry.path, 'r', encoding='utf-8').read()                
@@ -32,66 +30,54 @@ def iterate_pages():
             if not isinstance(item, Tag):
                 continue
             urls.append(item.find('a').attrs['href'])
-        yield urls
+        yield from urls
 
-async def fetch(url, session):
+async def fetch(url, session: aiohttp.ClientSession):
     try:
         async with session.get(url, raise_for_status=True) as response:
-            data = await response.read()
-            return url, data
+            return await response.read()            
     except aiohttp.client_exceptions.ClientResponseError as cre:
         sentry_sdk.capture_exception(cre)
 
-async def bound_fetch(semaphore, url, session):
-    async with semaphore:
-        return await fetch(url, session)
-
-def get_filename_for_save(url):
+def get_filename_for_write(url):
     filehash = hashlib.md5(url.encode('utf-8')).hexdigest()
     return os.path.join(env.path('SHIP_DATA_DIR2'), filehash)
 
 def url_is_fetched(url):
-    filename = get_filename_for_save(url)
+    filename = get_filename_for_write(url)
     if os.path.isfile(filename):
         return True
     return False
 
 async def producer(q: asyncio.Queue):
-    semaphore = asyncio.Semaphore(10)
-    async with aiohttp.ClientSession() as session:
-        page = 1
-        for urls in iterate_pages():
-            progress = tqdm(total=len(urls), leave=False, desc=f'fetch page #{page}')
-            tasks = [asyncio.create_task(bound_fetch(semaphore, url, session)) for url in urls if not url_is_fetched(url)]
+    for url in tqdm(url_generator(), desc='producer'):
+        await q.put(url)
 
-            for coro in asyncio.as_completed(tasks):
-                future = await coro
-                if future is not None:
-                    progress.update()
-                    url, data = future
-                    await q.put((url, data))
-            
-            page += 1
-
-            break
-
-async def consumer(q: asyncio.Queue):
+async def consumer(q: asyncio.Queue, name):
+    progress = tqdm(desc=f'consumer #{name}', leave=False)
     while True:
-        url, data = await q.get()
-        with open(get_filename_for_save(url), 'w', encoding='utf-8') as file:
-            file.write(data.decode('utf-8'))
+        url = await q.get()
+        if url_is_fetched(url):
+            q.task_done()
+            continue
+        async with aiohttp.ClientSession() as session:
+            data = await fetch(url, session)
+            with open(get_filename_for_write(url), 'w', encoding='utf-8') as file:
+                file.write(data.decode('utf-8'))
+        progress.update()
         q.task_done()
 
 async def main():
     try:
-        q = asyncio.Queue()
+        q = asyncio.Queue(maxsize=40)
         
         producer_task = asyncio.create_task(producer(q))
-        consumer_task = asyncio.create_task(consumer(q))
+        consumers = [asyncio.create_task(consumer(q, name)) for name in range(20)]
         
         await producer_task
         await q.join()
-        consumer_task.cancel()
+        for consumer_task in consumers:
+            consumer_task.cancel()
 
         print('proccess finished')
     except KeyboardInterrupt:
