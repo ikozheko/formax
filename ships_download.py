@@ -5,8 +5,6 @@ import sys
 import sentry_sdk
 from tqdm import tqdm
 from environs import Env
-from playhouse.db_url import connect
-from peewee import Model, IntegerField, CharField, ForeignKeyField
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 import hashlib
@@ -55,17 +53,20 @@ async def producer(q: asyncio.Queue):
 
 async def consumer(q: asyncio.Queue, name):
     progress = tqdm(desc=f'consumer #{name}', leave=False)
-    while True:
-        url = await q.get()
-        if url_is_fetched(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.97 Safari/537.36'
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
+        while True:
+            url = await q.get()
+            if url_is_fetched(url):
+                q.task_done()
+                continue
+                data = await fetch(url, session)
+                with open(get_filename_for_write(url), 'w', encoding='utf-8') as file:
+                    file.write(data.decode('utf-8'))
+            progress.update()
             q.task_done()
-            continue
-        async with aiohttp.ClientSession() as session:
-            data = await fetch(url, session)
-            with open(get_filename_for_write(url), 'w', encoding='utf-8') as file:
-                file.write(data.decode('utf-8'))
-        progress.update()
-        q.task_done()
 
 async def main():
     try:
