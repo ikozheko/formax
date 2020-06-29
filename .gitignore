@@ -6,3 +6,6 @@ dev.env
 seafarers.json
 /data
 /dump
+/media
+./ipynb_checkpoints
+doc.docx
