@@ -8,9 +8,9 @@ from tqdm import tqdm
 import peewee
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-import peewee
+from peewee import IntegerField, CharField, ForeignKeyField
 from playhouse.db_url import connect
-from playhouse.shortcuts import model_to_dict
+from playhouse.shortcuts import model_to_dict, dict_to_model
 from environs import Env
 
 env = Env()
@@ -23,67 +23,78 @@ sentry_sdk.init(
     integrations=[AioHttpIntegration()]
 )
 
-class BaseModel(peewee.Model):
+class BaseModel(Model):
     DATE_FORMAT = '%d.%m.%Y'
     class Meta:
         database = db
 
 class Department(BaseModel):
-    name = peewee.CharField()
+    name = CharField()
 
     def __str__(self):
         return self.name
 
 class Rank(BaseModel):
-    name = peewee.CharField()
+    name = CharField()
 
     def __str__(self):
         return self.name
 
 class Nationality(BaseModel):
-    name = peewee.CharField()
+    name = CharField()
 
     def __str__(self):
         return self.name
 
 class ShipType(BaseModel):
-    name = peewee.CharField()
+    name = CharField()
 
     def __str__(self):
         return self.name
 
 class Company(BaseModel):
-    name = peewee.CharField()
+    name = CharField()
+
+    def __str__(self):
+        return self.name
+
+class ManagerOwner(BaseModel):
+    name = CharField()
 
     def __str__(self):
         return self.name
 
 class Vessel(BaseModel):
-    name = peewee.CharField(null = True)
-    href = peewee.CharField(null = True)
+    name = CharField(null = True)
+    href = CharField(null = True)
+    imo_number = IntegerField()
+    ship_type = ForeignKeyField(ShipType, null=True)
+    gross_tonnage = CharField(null=True)
+    dwt = CharField(null=True)
+    managerowner = ForeignKeyField(ManagerOwner, null=True)
 
     def __str__(self):
         return self.name if self.name else self.href
 
 class Seafarer(BaseModel):
-    id = peewee.IntegerField(unique=True)
-    name = peewee.CharField()
-    department = peewee.ForeignKeyField(Department, null=True)
-    rank = peewee.ForeignKeyField(Rank, null = True)
-    nationality = peewee.ForeignKeyField(Nationality, null=True)
+    id = IntegerField(unique=True)
+    name = CharField()
+    department = ForeignKeyField(Department, null=True)
+    rank = ForeignKeyField(Rank, null = True)
+    nationality = ForeignKeyField(Nationality, null=True)
 
     def __str__(self):
         return self.name
 
 class ServiceRecord(BaseModel):
-    seafarer = peewee.ForeignKeyField(Seafarer, on_delete='CASCADE')
-    department = peewee.ForeignKeyField(Department, null=True)
-    rank = peewee.ForeignKeyField(Rank, null=True)
-    ship_type = peewee.ForeignKeyField(ShipType, null=True)
-    vessel = peewee.ForeignKeyField(Vessel, null=True)
-    company = peewee.ForeignKeyField(Company, null=True)
-    from_date = peewee.DateField(formats=[BaseModel.DATE_FORMAT], null=True)
-    to_date = peewee.DateField(formats=[BaseModel.DATE_FORMAT], null=True)
+    seafarer = ForeignKeyField(Seafarer, on_delete='CASCADE')
+    department = ForeignKeyField(Department, null=True)
+    rank = ForeignKeyField(Rank, null=True)
+    ship_type = ForeignKeyField(ShipType, null=True)
+    vessel = ForeignKeyField(Vessel, null=True)
+    company = ForeignKeyField(Company, null=True)
+    from_date = DateField(formats=[BaseModel.DATE_FORMAT], null=True)
+    to_date = DateField(formats=[BaseModel.DATE_FORMAT], null=True)
 
 TOTAL_PAGE_COUNT = 163552
 LIMIT = 20
@@ -304,11 +315,32 @@ def main():
                 'department': get_or_create(Department, name=record['department']) if record.get('department') else None,
                 'rank': get_or_create(Rank, name=record['rank']) if record.get('rank') else None,
                 'ship_type': get_or_create(ShipType, name=record['ship_type']) if record.get('ship_type') else None,
-                'vessel': get_or_create(Vessel, name=record.get('vessel_name'), href=record.get('vessel_href')),
+                'vessel': get_or_create(Vessel, name=record.get('vessel_name'))
+                    if record.get('vessel_name') else get_or_create(Vessel, href=record.get('vessel_href')),
                 'company': get_or_create(Company, name=record['company']) if record.get('company') else None,
                 'from_date': record['from'] if record.get('from') else None,
                 'to_date': record['to'] if record.get('to') else None,
             })
         ServiceRecord.insert_many(rows=records).execute()
 
+if __name__ == '__main__':
+    from playhouse.migrate import migrate, MySQLMigrator
+
+    migrator = MySQLMigrator(db)
+    imo_number_field = IntegerField(null=True)
+    ship_type_field = ForeignKeyField(ShipType, null=True)
+    gross_tonnage_field = CharField()
+    dwt_field = CharField()
+    managerowner_field = ForeignKeyField(ManagerOwner, null=True)
+
+    migrate(
+        # migrator.add_column('vessel', 'imo_number', imo_number_field),
+        migrator.add_column('vessel', 'ship_type', ship_type_field),
+        migrator.add_column('vessel', 'gross_tonnage', gross_tonnage_field),
+        migrator.add_column('vessel', 'dwt_field', dwt_field),
+        migrator.add_column('vessel', 'managerowner', managerowner_field),
+    )
+
 print('proccess finished')
+
+    
