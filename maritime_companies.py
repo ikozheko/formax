@@ -9,61 +9,66 @@ from playhouse.db_url import connect
 from tqdm import tqdm
 import re
 import sys
-import cv2 as cv
-# import sentry_sdk
 import os
 
 env = Env()
 env.read_env('dev.env')
-# sentry_sdk.init(
-#     env('SENTRY_TOKEN'),
-# )
-doc = Document('doc.docx')
 
-def parse_table(table, next_table):
-    obj = {}
-    rows_count = len(table.rows)
-    iter_table = itertools.chain(table.rows, next_table.rows if next_table is not None else [])
+doc = Document('shipowners_and_shipmanagers.docx')
 
-    def _get_text(row):
-        data = []
-        for paragraph in row.cells[0].paragraphs:
-            doc = BeautifulSoup(paragraph._p.xml, 'lxml')            
-            words = doc.find_all('w:t')           
-            words = filter(lambda item: item.string.strip()!='', words)
-            data.append(' '.join([word.string.strip() for word in words if word.string.strip()]))
-        return ''.join(data)
+def _get_text(row):
+    data = []
+    for paragraph in row.cells[0].paragraphs:
+        doc = BeautifulSoup(paragraph._p.xml, 'lxml')            
+        words = doc.find_all('w:t')           
+        words = filter(lambda item: item.string.strip()!='', words)
+        data.append(' '.join([word.string.strip() for word in words if word.string.strip()]))
+    return ''.join(data)
 
-    def _get_phone(text):
-        for i in text:
-            if i not in ' -()+,.;/' and not i.isdigit():
-                return None
 
-        return text
-
-    def _get_email(text):
-        if '@' not in text:
-            return None
-        
-        return text
-
-    def _get_link(text):
-        if not text.startswith('http') and not text.startswith('www'):
+def _get_phone(text):
+    for i in text:
+        if i not in ' -()+,.;/' and not i.isdigit():
             return None
 
-        return text
+    return text
 
-    row = next(iter_table)
+
+def _get_email(text):
+    if '@' not in text:
+        return None
     
-    # name
+    return text
+
+
+def _get_link(text):
+    if not text.startswith('http') and not text.startswith('www'):
+        return None
+
+    return text
+
+
+def parse_table(row_gen):
+    obj = {}
+
+    while True:
+        row = next(row_gen)
+        tr = BeautifulSoup(row._tr.xml, 'lxml')            
+        bold_font = tr.find('w:b')  
+        if bold_font is None:
+            continue
+
+        break
+
     text = _get_text(row)
     obj['name'] = text
 
     fields = ['address', 'phone', 'email', 'site', 'description']
 
-    row = next(iter_table)
+    row = next(row_gen)
     text = _get_text(row)
     while fields:
+
         field = fields.pop(0)
 
         if field == 'address':
@@ -74,7 +79,7 @@ def parse_table(table, next_table):
             ):
                 obj['address'] = text
 
-                row = next(iter_table)
+                row = next(row_gen)
                 text = _get_text(row)
                 continue
 
@@ -86,7 +91,7 @@ def parse_table(table, next_table):
                     text = [phone for phone in text if len(phone)]
                 obj['phone'] = text
 
-                row = next(iter_table)
+                row = next(row_gen)
                 text = _get_text(row)
                 continue
 
@@ -98,7 +103,7 @@ def parse_table(table, next_table):
                     text = [email for email in text if len(email)]                
                 obj['email'] = text
 
-                row = next(iter_table)
+                row = next(row_gen)
                 text = _get_text(row)
                 continue
 
@@ -107,7 +112,7 @@ def parse_table(table, next_table):
                 text = re.sub('\s+', '', text)
                 obj['site'] = text
 
-                row = next(iter_table)
+                row = next(row_gen)
                 text = _get_text(row)
                 continue
 
@@ -147,11 +152,26 @@ class DocxSite(BaseModel):
     def __str__(self):
         return self.address
 
-db.create_tables((DocxCompany, DocxPhone, DocxEmail, DocxSite))
+# db.create_tables((DocxCompany, DocxPhone, DocxEmail, DocxSite))
+def parse_tables(row_gen):
+    while True:
+        try:
+            yield parse_table(row_gen)
+        except StopIteration:
+            return
 
-for tables in tqdm(zip(doc.tables, doc.tables[1:] + [None]), total=len(doc.tables)):
-    obj = parse_table(*tables)
+row_gen = (
+    row
+    for table in doc.tables
+    for row in table.rows
+)
 
+# for tables in tqdm(zip(doc.tables, doc.tables[1:] + [None]), total=len(doc.tables)):
+
+i = 0
+for obj in tqdm(parse_tables(row_gen)):
+    i += 1
+    
     company = DocxCompany.create(
         name=obj['name'],
         address=obj['address'] if obj.get('address') else None,
@@ -178,4 +198,4 @@ for tables in tqdm(zip(doc.tables, doc.tables[1:] + [None]), total=len(doc.table
             DocxSite.insert_many(rows=obj_list).execute()
         else:
             DocxSite.create(company_id=company.id, url=obj['site'])
-        
+
